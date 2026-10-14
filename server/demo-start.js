@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Caio Correia | MIT License (see LICENSE)
 const { createApp } = require('./index');
 
 const { server } = createApp({ demo: true, autoStart: true });

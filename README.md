@@ -86,7 +86,7 @@ O que chegar depois de conectado entra em `data/cache`. Abrir uma conversa tamb�
 
 Com a conversa aberta, o rodapé envia texto, imagem, vídeo, áudio, voz, arquivo, figurinha, local ou contato. Arquivo até 80 MB. Voz sai como mensagem de voz. Figurinha pede uma imagem. A mensagem enviada entra no cache e na conversa aberta.
 
-O botão de microfone do rodapé grava áudio pelo navegador e envia como mensagem de voz. Áudios recebidos tocam na própria conversa. O botão Transcrever converte áudio em texto com o whisper.cpp local (modelo em `bin/whisper`), sem enviar nada para fora da máquina. A transcrição fica em cache em `data/cache/transcripts`. Precisa de `ffmpeg` no PATH e dos arquivos de `bin/whisper` (baixados de ggerganov/whisper.cpp). `WHISPER_CLI`, `WHISPER_MODEL`, `WHISPER_LANG` e `WHISPER_DIR` trocam esses caminhos.
+O botão de microfone do rodapé grava áudio pelo navegador e envia como mensagem de voz. Áudios recebidos tocam na própria conversa. O botão Transcrever converte áudio em texto. Com `WHISPER_API_URL` no `.env` (endpoint compatível com OpenAI, ex.: servidor faster-whisper na VM, com `WHISPER_API_KEY`), a transcrição sai pela rede; sem ele, cai no whisper.cpp local (modelo em `bin/whisper`), sem enviar nada para fora da máquina. A transcrição fica em cache em `data/cache/transcripts`. O modo local precisa de `ffmpeg` no PATH e dos arquivos de `bin/whisper` (baixados de ggerganov/whisper.cpp). `WHISPER_CLI`, `WHISPER_MODEL`, `WHISPER_LANG` e `WHISPER_DIR` trocam esses caminhos.
 
 ## Exportação, backup e exclusão
 
@@ -94,8 +94,14 @@ Exportar esta conversa, ou marcar várias e usar Baixar anexos e HTML. A pasta f
 
 Backup grava a conversa unida em `data/backups/<data>/`, com `manifest.json`, `mensagens.json` e os anexos que o WhatsApp ainda entrega. A extração lê até 2000 mensagens recentes de cada número. Mídia expirada entra como indisponível.
 
-Para apagar, abra a conversa e clique numa mensagem. Shift marca o intervalo. Ctrl soma ou tira uma mensagem. Excluir pede confirmação. Sem a opção "para todos", a exclusão vale para o número de onde a mensagem saiu. "Excluir para todos" só vale para mensagens suas que o WhatsApp ainda aceita apagar. Não tem volta.
+Para apagar, abra a conversa e clique numa mensagem. Shift marca o intervalo. Ctrl soma ou tira uma mensagem. Excluir pede confirmação e vale apenas para o dono do número (ou o administrador). Sem a opção "para todos", a exclusão vale para o número de onde a mensagem saiu. "Excluir para todos" só vale para mensagens suas que o WhatsApp ainda aceita apagar.
+
+Tudo que é apagado vai para a **lixeira** (botão 🗑 no topo): mensagens excluídas pelo app ou revogadas no celular ficam arquivadas em `data/trash/` com mídia, motivo e data. Da lixeira dá para restaurar a mensagem para o histórico local, restaurar e re-enviar para o WhatsApp (volta como mensagem nova com aviso de restauração) ou excluir definitivamente. Mídia recebida é baixada proativamente, então o backup existe mesmo se for apagada no celular depois.
 
 ## Dados que não vão para o git
 
-`data/` guarda sessão, cache, exportação, backup e `auth.json`. `.wwebjs_cache/` é cache do WhatsApp Web. Os dois ficam de fora do repositório.
+`data/` guarda sessão, cache, exportação, backup, lixeira e `auth.json`. `.wwebjs_cache/` é cache do WhatsApp Web e `bin/` guarda o whisper local. Os três ficam de fora do repositório.
+
+## Licença
+
+MIT — Copyright (c) 2026 Caio Correia. Veja [LICENSE](LICENSE).

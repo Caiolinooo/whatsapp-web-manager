@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Caio Correia | MIT License (see LICENSE)
 const express = require('express');
 const fs = require('fs');
 const http = require('http');
