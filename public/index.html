@@ -14,6 +14,7 @@
   <div class="top-actions">
     <button id="open-accounts" type="button" hidden>Números</button>
     <button id="open-finder" type="button" hidden>Pesquisar</button>
+    <button id="open-trash" type="button" hidden>Lixeira</button>
     <button id="open-users" type="button" hidden>Acessos</button>
     <button id="open-password" type="button" hidden>Senha</button>
     <span id="who" class="muted"></span>
@@ -86,8 +87,30 @@
       <div id="export-result"></div>
       <div id="messages"></div>
       <form id="composer">
+        <p id="send-blocked" class="readonly-note" hidden></p>
+        <div id="recorder-bar" hidden>
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span id="recorder-time">0:00</span>
+          <span class="rec-label muted">Gravando mensagem de voz…</span>
+          <button id="recorder-cancel" type="button">Cancelar</button>
+          <button id="recorder-send" type="button">Enviar</button>
+        </div>
         <div class="composer-line">
-          <select id="send-kind" aria-label="Tipo da mensagem">
+          <div class="attach-wrap">
+            <button id="attach-button" type="button" title="Anexar" aria-label="Anexar" aria-haspopup="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <div id="attach-menu" hidden>
+              <button type="button" data-kind="image">Imagem</button>
+              <button type="button" data-kind="video">Vídeo</button>
+              <button type="button" data-kind="audio">Áudio</button>
+              <button type="button" data-kind="document">Arquivo</button>
+              <button type="button" data-kind="sticker">Figurinha</button>
+              <button type="button" data-kind="location">Local</button>
+              <button type="button" data-kind="contact">Contato</button>
+            </div>
+          </div>
+          <select id="send-kind" aria-label="Tipo da mensagem" hidden>
             <option value="text">Texto</option>
             <option value="image">Imagem</option>
             <option value="video">Vídeo</option>
@@ -100,8 +123,14 @@
           </select>
           <select id="send-account" aria-label="Número que envia" hidden></select>
           <input id="send-file" type="file" hidden>
-          <input id="send-text" type="text" placeholder="Mensagem" autocomplete="off">
-          <button id="send-button" type="submit">Enviar</button>
+          <span id="file-chip" hidden><span id="file-chip-name"></span><button id="file-chip-clear" type="button" aria-label="Remover anexo">×</button></span>
+          <input id="send-text" type="text" placeholder="Digite uma mensagem" autocomplete="off">
+          <button id="record-audio" type="button" title="Gravar mensagem de voz" aria-label="Gravar mensagem de voz">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+          </button>
+          <button id="send-button" type="submit" title="Enviar" aria-label="Enviar">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4 21.85 12 3.4 3.6l-.01 6.53L14 12 3.39 13.87z"/></svg>
+          </button>
         </div>
         <div id="send-extra" hidden>
           <input id="send-lat" type="text" inputmode="decimal" placeholder="Latitude" autocomplete="off">
@@ -167,17 +196,31 @@
   <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="users-title">
     <h3 id="users-title">Acessos</h3>
     <form id="user-form" class="inline-form">
+      <input id="user-edit-id" type="hidden">
       <input id="user-name" type="text" placeholder="usuário" autocomplete="off" required>
       <input id="user-pass" type="password" placeholder="senha" autocomplete="new-password" required>
       <select id="user-role" aria-label="Papel">
         <option value="user">Usuário</option>
         <option value="admin">Administrador</option>
       </select>
-      <button type="submit">Criar</button>
+      <button id="user-submit" type="submit">Criar</button>
+      <button id="user-edit-cancel" type="button" hidden>Cancelar edição</button>
+      <div id="user-accounts" class="account-checks"></div>
     </form>
     <div id="user-list"></div>
     <div class="dialog-actions">
       <button id="close-users" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="trash-panel" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+    <h3 id="trash-title">Lixeira</h3>
+    <p class="muted">Tudo que foi apagado — aqui ou no celular — fica guardado neste computador, com as mídias. Restaurar devolve ao projeto; "re-enviar" manda de volta ao WhatsApp como mensagem nova.</p>
+    <div id="trash-list"></div>
+    <div class="dialog-actions">
+      <button id="close-trash" type="button">Fechar</button>
     </div>
   </div>
 </div>

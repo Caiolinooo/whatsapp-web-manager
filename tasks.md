@@ -1,12 +1,12 @@
 # WhatsApp Manager
 
-App local. O servidor escuta só em `127.0.0.1:3789`.
+O servidor escuta em `0.0.0.0:3789`. Esta máquina, a LAN e a internet (com porta encaminhada) chegam no mesmo Node.
 
 ## Subir
 
 1. Instalar dependências: `npm install` na pasta `whatsapp-web-manager`.
 2. Iniciar de verdade: `npm start`.
-3. Abrir `http://127.0.0.1:3789`.
+3. Abrir `http://127.0.0.1:3789` aqui, ou `http://IP:3789` de outra rede. `HOST=127.0.0.1` volta a escutar só local.
 4. Modo sem celular e sem login, só para ensaio da interface: `npm run demo`.
 5. No Linux o programa usa o Chrome ou o Chromium do sistema: `/usr/bin/google-chrome-stable`, `/usr/bin/google-chrome`, `/usr/bin/chromium`, `/usr/bin/chromium-browser` ou `/snap/bin/chromium`. `CHROME_PATH` continua valendo antes desses caminhos.
 

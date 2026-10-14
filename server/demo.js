@@ -266,6 +266,15 @@ function createDemoService({ exportRoot, io }) {
       const failed = [...pending].map((id) => ({ id, error: 'Mensagem não encontrada' }));
       return { deleted, failed };
     },
+    listTrash() {
+      return [];
+    },
+    async restoreTrash() {
+      throw Object.assign(new Error('Lixeira indisponível na demonstração'), { status: 400 });
+    },
+    async destroyTrash() {
+      throw Object.assign(new Error('Lixeira indisponível na demonstração'), { status: 400 });
+    },
     async exportChats(chatIds, onProgress) {
       const exports = [];
       for (const chatId of chatIds) {

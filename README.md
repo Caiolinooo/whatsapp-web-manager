@@ -12,7 +12,7 @@ Roda num computador com Node.js e Google Chrome (ou Chromium) abertos o tempo to
 
 Não rode na Vercel, nem noutro hosting serverless. Esse tipo de serviço apaga o disco entre invocações, limita o tempo do processo e não mantém o Chrome. Sem isso o QR não completa e a sessão se perde. Um registo DNS, incluindo SRV, também não publica o programa: o browser não consulta SRV para abrir um site.
 
-O servidor escuta só em `127.0.0.1`. A porta padrão é `3789`.
+O servidor escuta em `0.0.0.0` (todas as interfaces). A porta padrão é `3789`. Quem alcança essa porta na rede ou na internet chega no programa. O login continua obrigatório no `npm start`.
 
 ## Requisitos
 
@@ -29,7 +29,7 @@ npm install
 npm start
 ```
 
-Abra http://127.0.0.1:3789. No primeiro acesso, crie o administrador. Depois conecte cada número e leia o QR no celular: WhatsApp, Dispositivos conectados, Conectar dispositivo. Outra sessão Web aberta cede o lugar.
+Abra http://127.0.0.1:3789 nesta máquina, ou `http://IP-PÚBLICO:3789` de fora (roteador com encaminhamento da porta 3789). No primeiro acesso, crie o administrador. Depois conecte cada número e leia o QR no celular: WhatsApp, Dispositivos conectados, Conectar dispositivo. Outra sessão Web aberta cede o lugar.
 
 Ensaio da interface, sem celular e sem login:
 
@@ -49,7 +49,8 @@ O teste de tela usa o Chrome instalado e dados de demonstração. O QR real depe
 
 | Variável | Efeito |
 | --- | --- |
-| `PORT` | Porta HTTP. Padrão `3789`. O endereço continua `127.0.0.1`. |
+| `PORT` | Porta HTTP. Padrão `3789`. |
+| `HOST` | Interface de escuta. Padrão `0.0.0.0` (internet e LAN). `127.0.0.1` trava de novo só nesta máquina. |
 | `CHROME_PATH` | Caminho do Chrome ou do Chromium. Vale antes da procura automática. |
 | `HEADFUL` | `1` abre o Chrome com janela. O padrão é headless. |
 | `DEMO` | `1` sobe a demonstração, o mesmo que `npm run demo`. |
@@ -64,6 +65,7 @@ Não use porta de depuração remota do Chrome. O programa não abre `9333`.
 4. Quem é administrador abre Acessos e cria, desativa ou exclui outras pessoas. Usuário comum não vê essa tela.
 5. Trocar a senha vale para quem está logado e derruba as outras sessões dessa pessoa.
 6. Sem login, a API responde 401. A demonstração não usa essa trava.
+7. Em Acessos, o administrador atribui números a cada pessoa. Todo mundo vê todas as conversas, mas o envio só sai pelos números atribuídos a quem está logada. Administrador envia por qualquer número. Conversa de número não atribuído abre em modo somente leitura.
 
 ## Números
 
@@ -83,6 +85,8 @@ O filtro do topo da lista é imediato, por nome ou número, no que já foi carre
 O que chegar depois de conectado entra em `data/cache`. Abrir uma conversa também grava as mensagens carregadas. Isso não puxa sozinho o histórico antigo. Mídia recebida é baixada para o cache em segundo plano, uma por vez.
 
 Com a conversa aberta, o rodapé envia texto, imagem, vídeo, áudio, voz, arquivo, figurinha, local ou contato. Arquivo até 80 MB. Voz sai como mensagem de voz. Figurinha pede uma imagem. A mensagem enviada entra no cache e na conversa aberta.
+
+O botão de microfone do rodapé grava áudio pelo navegador e envia como mensagem de voz. Áudios recebidos tocam na própria conversa. O botão Transcrever converte áudio em texto com o whisper.cpp local (modelo em `bin/whisper`), sem enviar nada para fora da máquina. A transcrição fica em cache em `data/cache/transcripts`. Precisa de `ffmpeg` no PATH e dos arquivos de `bin/whisper` (baixados de ggerganov/whisper.cpp). `WHISPER_CLI`, `WHISPER_MODEL`, `WHISPER_LANG` e `WHISPER_DIR` trocam esses caminhos.
 
 ## Exportação, backup e exclusão
 

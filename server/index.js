@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -7,6 +8,7 @@ const { createDemoService } = require('./demo');
 const { resolveInside } = require('../lib/files');
 const { createAuth, readCookie, writeSessionCookie } = require('../lib/auth');
 const { readMultipart, inferKind } = require('../lib/multipart');
+const { createTranscriber } = require('../lib/transcribe');
 
 const PUBLIC_API = new Set([
   '/api/auth/session',
@@ -26,7 +28,9 @@ function createApp(options = {}) {
   const service = demo
     ? createDemoService({ exportRoot, io })
     : require('./hub').createHub({ dataDir, exportRoot, io });
+  const transcriber = createTranscriber({ cacheDir: path.join(dataDir, 'cache') });
 
+  app.set('trust proxy', true);
   app.use(express.json({ limit: '1mb' }));
 
   if (auth) {
@@ -129,6 +133,7 @@ function createApp(options = {}) {
           username: req.body?.username,
           password: req.body?.password,
           role: req.body?.role,
+          accountIds: req.body?.accountIds,
         }),
       });
     } catch (error) {
@@ -143,6 +148,7 @@ function createApp(options = {}) {
           role: req.body?.role,
           disabled: req.body?.disabled,
           password: req.body?.password,
+          accountIds: req.body?.accountIds,
         }),
       });
     } catch (error) {
@@ -173,6 +179,13 @@ function createApp(options = {}) {
     const accounts = typeof service.listAccounts === 'function'
       ? service.listAccounts()
       : (service.getStatus().accounts || []);
+    if (auth && req.user) {
+      const mine = new Set(req.user.accountIds || []);
+      const isAdmin = req.user.role === 'admin';
+      for (const account of accounts) {
+        account.canSend = isAdmin || mine.has(account.id);
+      }
+    }
     res.json({ accounts });
   });
 
@@ -345,14 +358,82 @@ function createApp(options = {}) {
     }
   });
 
+  app.post('/api/messages/transcribe', async (req, res, next) => {
+    try {
+      const messageId = String(req.body?.messageId || '');
+      if (!messageId) return res.status(400).json({ error: 'Mensagem ausente' });
+      const file = await service.getMediaFile(messageId, req.body?.accountId);
+      if (!file) return res.status(404).json({ error: 'Mídia não encontrada' });
+      const buffer = file.path
+        ? await fs.promises.readFile(file.path)
+        : file.buffer;
+      const result = await transcriber.transcribe(messageId, buffer, file.mimetype);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/messages/delete', async (req, res, next) => {
     try {
       const ids = Array.isArray(req.body?.messageIds) ? req.body.messageIds.filter(Boolean) : [];
       if (!ids.length) return res.status(400).json({ error: 'Nenhuma mensagem selecionada' });
+      // Só o dono do número (ou admin) remove mensagens desse número
+      if (auth && req.user.role !== 'admin' && typeof service.messageAccountIds === 'function') {
+        const allowed = new Set(req.user.accountIds || []);
+        const owners = service.messageAccountIds(ids);
+        const foreign = ids.filter((id) => owners[id] && !allowed.has(owners[id]));
+        if (foreign.length) {
+          return res.status(403).json({ error: 'Só o dono do número pode remover as conversas dele' });
+        }
+      }
       const result = await service.deleteMessages(ids, Boolean(req.body?.everyone), (progress) => {
         io.emit('progress', { kind: 'delete', ...progress });
       });
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/trash', (req, res, next) => {
+    try {
+      if (typeof service.listTrash !== 'function') return res.json({ entries: [] });
+      let entries = service.listTrash(req.query.accountId || '');
+      // Usuário comum só enxerga a lixeira dos números dele
+      if (auth && req.user.role !== 'admin') {
+        const allowed = new Set(req.user.accountIds || []);
+        entries = entries.filter((entry) => allowed.has(entry.accountId));
+      }
+      res.json({ entries });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/trash/restore', async (req, res, next) => {
+    try {
+      const accountId = String(req.body?.accountId || '');
+      const id = String(req.body?.id || '');
+      if (!accountId || !id) return res.status(400).json({ error: 'Escolha o que restaurar' });
+      if (auth && req.user.role !== 'admin' && !(req.user.accountIds || []).includes(accountId)) {
+        return res.status(403).json({ error: 'Só o dono do número pode restaurar as conversas dele' });
+      }
+      res.json(await service.restoreTrash(accountId, id, Boolean(req.body?.toWhatsApp)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/trash/destroy', async (req, res, next) => {
+    try {
+      const accountId = String(req.body?.accountId || '');
+      const id = String(req.body?.id || '');
+      if (!accountId || !id) return res.status(400).json({ error: 'Escolha o que excluir' });
+      if (auth && req.user.role !== 'admin' && !(req.user.accountIds || []).includes(accountId)) {
+        return res.status(403).json({ error: 'Só o dono do número pode esvaziar a lixeira dele' });
+      }
+      res.json(await service.destroyTrash(accountId, id));
     } catch (error) {
       next(error);
     }
@@ -371,6 +452,18 @@ function createApp(options = {}) {
         file = parsed.file;
       }
       const kind = inferKind(fields.kind, file);
+      if (auth && req.user.role !== 'admin') {
+        const allowed = new Set(req.user.accountIds || []);
+        const owner = typeof service.ownerAccountId === 'function'
+          ? service.ownerAccountId(fields.chatId || '', fields.accountId || '')
+          : (fields.accountId || null);
+        if (owner && !allowed.has(owner)) {
+          return res.status(403).json({ error: 'Você só pode enviar pelos números atribuídos a você' });
+        }
+        if (!owner && fields.accountId && !allowed.has(fields.accountId)) {
+          return res.status(403).json({ error: 'Você só pode enviar pelos números atribuídos a você' });
+        }
+      }
       const result = await service.sendMessage({
         accountId: fields.accountId || '',
         chatId: fields.chatId || '',
@@ -501,12 +594,19 @@ function openDir(dir) {
   spawn(command, [dir], { detached: true, stdio: 'ignore' }).unref();
 }
 
+function listenHost() {
+  const host = process.env.HOST;
+  if (host === undefined || host === '') return '0.0.0.0';
+  return host;
+}
+
 if (require.main === module) {
   const demo = process.env.DEMO === '1';
   const { server } = createApp({ demo, autoStart: true });
   const port = Number(process.env.PORT) || 3789;
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`WhatsApp Manager em http://127.0.0.1:${port}`);
+  const host = listenHost();
+  server.listen(port, host, () => {
+    console.log(`WhatsApp Manager em http://${host}:${port}`);
   });
 }
 

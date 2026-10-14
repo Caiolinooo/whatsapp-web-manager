@@ -135,3 +135,70 @@ test('login protege a API e o administrador gere acessos', async () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test('usuário comum só envia pelos números atribuídos; admin por todos', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-send-guard-'));
+  const ctx = createApp({ dataDir, exportRoot: path.join(dataDir, 'exports'), autoStart: false });
+  try {
+    const port = await listen(ctx);
+    const base = `http://127.0.0.1:${port}`;
+    const setup = await fetch(`${base}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'ana', password: 'senha-forte' }),
+    });
+    const adminCookie = cookieFrom(setup);
+
+    const created = await fetch(`${base}/api/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ username: 'bia', password: 'outra-senha', role: 'user' }),
+    }).then((res) => res.json());
+    assert.deepEqual(created.user.accountIds, []);
+
+    const assigned = await fetch(`${base}/api/users/${created.user.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ accountIds: ['5048e9c7895a', 'nao-existe', '5048e9c7895a'] }),
+    }).then((res) => res.json());
+    assert.deepEqual(assigned.user.accountIds, ['5048e9c7895a']);
+
+    const login = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'bia', password: 'outra-senha' }),
+    }).then((res) => res.json());
+    assert.deepEqual(login.user.accountIds, ['5048e9c7895a']);
+    const biaCookie = cookieFrom(await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'bia', password: 'outra-senha' }),
+    }));
+
+    const denied = await fetch(`${base}/api/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: biaCookie },
+      body: JSON.stringify({ chatId: 'c1', accountId: '572e6d15c8a3', text: 'oi' }),
+    });
+    assert.equal(denied.status, 403);
+
+    // Número atribuído passa pela guarda e falha só por não haver conta conectada.
+    const allowed = await fetch(`${base}/api/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: biaCookie },
+      body: JSON.stringify({ chatId: 'c1', accountId: '5048e9c7895a', text: 'oi' }),
+    });
+    assert.equal(allowed.status, 409);
+
+    // Admin não passa pela guarda mesmo sem atribuição.
+    const admin = await fetch(`${base}/api/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ chatId: 'c1', accountId: '572e6d15c8a3', text: 'oi' }),
+    });
+    assert.equal(admin.status, 409);
+  } finally {
+    await shutdown(ctx);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

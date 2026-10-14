@@ -9,9 +9,12 @@ data/cache/
 data/backups/
 data/auth.json
 data/accounts.json
+data/trash/
+.env
 *.log
 
 
 [You have received this identical output 3 times. Re-reading 'D:/Projeto/Desenvolvendo/whatsapp-web-manager/.gitignore:raw' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]
 
-[You have received this identical output 3 times. Re-reading 'D:\Projeto\Desenvolvendo\whatsapp-web-manager\.gitignore:raw' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]
+[You have received this identical output 3 times. Re-reading 'D:\Projeto\Desenvolvendo\whatsapp-web-manager\.gitignore:raw' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]bin/
+bin/

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const { Client, LocalAuth, MessageMedia, Location } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const { writeStructuredExport } = require('../lib/export');
@@ -41,7 +42,7 @@ const SKIP_LIVE = new Set([
   'ciphertext',
 ]);
 
-function createWaService({ dataDir, exportRoot, io, onLive }) {
+function createWaService({ dataDir, exportRoot, io, onLive, onRevoke }) {
   const sessionPath = path.join(dataDir, 'session');
   const avatarDir = path.join(dataDir, 'avatars');
   const mediaDir = path.join(dataDir, 'media-cache');
@@ -152,6 +153,20 @@ function createWaService({ dataDir, exportRoot, io, onLive }) {
         console.error('CACHE', error.message || error);
       });
     });
+    // Mensagem apagada no celular (para todos ou só para mim) → lixeira
+    const revokeId = (msg, revoked) => {
+      const source = revoked || msg;
+      const idObj = (source && source.id) || {};
+      return idObj._serialized || (typeof (source && source.id) === 'string' ? source.id : '');
+    };
+    client.on('message_revoke_everyone', (msg, revoked) => {
+      const id = revokeId(msg, revoked);
+      if (id && typeof onRevoke === 'function') onRevoke(id);
+    });
+    client.on('message_revoke_me', (msg) => {
+      const id = revokeId(msg);
+      if (id && typeof onRevoke === 'function') onRevoke(id);
+    });
     return client;
   }
 
@@ -207,6 +222,32 @@ function createWaService({ dataDir, exportRoot, io, onLive }) {
     return { chat: summary, message };
   }
 
+  async function toVoiceMedia(file) {
+    // WA só aceita voice note em ogg/opus; MediaRecorder do Chrome gera webm → transcodifica
+    const mime = String(file.mimetype || '');
+    if (/audio\/(ogg|opus)/.test(mime) && !mime.includes('webm')) {
+      return new MessageMedia('audio/ogg; codecs=opus', file.buffer.toString('base64'), 'audio.ogg');
+    }
+    const stamp = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const dir = path.join(mediaDir, 'ptt-tmp');
+    fs.mkdirSync(dir, { recursive: true });
+    const input = path.join(dir, `${stamp}.bin`);
+    const output = path.join(dir, `${stamp}.ogg`);
+    try {
+      fs.writeFileSync(input, file.buffer);
+      await new Promise((resolve, reject) => {
+        execFile('ffmpeg', ['-y', '-i', input, '-ar', '48000', '-ac', '1', '-c:a', 'libopus', '-b:a', '64k', output],
+          { timeout: 60000, windowsHide: true },
+          (error, stdout, stderr) => error ? reject(new Error(String(stderr || error.message).slice(0, 300))) : resolve());
+      });
+      const buffer = fs.readFileSync(output);
+      return new MessageMedia('audio/ogg; codecs=opus', buffer.toString('base64'), 'audio.ogg');
+    } finally {
+      try { fs.rmSync(input, { force: true }); } catch (error) { /* temp */ }
+      try { fs.rmSync(output, { force: true }); } catch (error) { /* temp */ }
+    }
+  }
+
   async function sendMessage(input) {
     requireReady();
     const chatId = String(input.chatId || '');
@@ -244,11 +285,13 @@ function createWaService({ dataDir, exportRoot, io, onLive }) {
       ].join('\n');
       sent = await client.sendMessage(chatId, vcard, { parseVCards: true });
     } else if (input.file && input.file.buffer && input.file.buffer.length) {
-      const media = new MessageMedia(
-        input.file.mimetype || 'application/octet-stream',
-        input.file.buffer.toString('base64'),
-        input.file.filename || 'arquivo',
-      );
+      const media = kind === 'ptt'
+        ? await toVoiceMedia(input.file)
+        : new MessageMedia(
+            input.file.mimetype || 'application/octet-stream',
+            input.file.buffer.toString('base64'),
+            input.file.filename || 'arquivo',
+          );
       const options = {};
       if (text.trim()) options.caption = text;
       if (kind === 'ptt') options.sendAudioAsVoice = true;
@@ -262,7 +305,10 @@ function createWaService({ dataDir, exportRoot, io, onLive }) {
       }
       sent = await withTimeout(client.sendMessage(chatId, text), 60000, 'Envio');
     }
-    const live = sent ? await ingestLive(sent).catch(() => null) : null;
+    if (!sent) {
+      throw new Error('O WhatsApp não confirmou o envio');
+    }
+    const live = await ingestLive(sent).catch(() => null);
     return { ok: true, id: live && live.message ? live.message.id : '', chat: live && live.chat, message: live && live.message };
   }
 

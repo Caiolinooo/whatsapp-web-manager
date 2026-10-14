@@ -18,6 +18,7 @@ const state = {
   accountStamp: '',
   session: null,
   accounts: [],
+  canSend: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +46,14 @@ function toast(message) {
   node.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { node.hidden = true; }, 5000);
+}
+
+function mergeAccounts(accounts) {
+  for (const account of accounts || []) {
+    if (account && account.id && typeof account.canSend === 'boolean') {
+      state.canSend[account.id] = account.canSend;
+    }
+  }
 }
 
 function accountLinks(chat) {
@@ -141,12 +150,37 @@ function updateActions() {
   $('backup-selected').disabled = state.busy || chatCount === 0;
   const msgCount = state.selectedMsgs.size;
   $('msg-count').textContent = msgCount ? `${msgCount} mensagens` : '';
+  // Remoção só para o dono do número da conversa aberta (admin vê tudo)
+  const link = currentSendLink();
+  const blocked = Boolean(link.accountId) && state.canSend[link.accountId] === false;
+  $('delete-messages').hidden = blocked;
   $('delete-messages').disabled = state.busy || msgCount === 0;
   $('delete-messages').textContent = msgCount ? `Excluir (${msgCount})` : 'Excluir';
   $('export-one').disabled = state.busy || !state.openChatId;
   $('backup-one').disabled = state.busy || !state.openChatId;
   $('load-more').disabled = state.busy || !state.openChatId;
-  $('send-button').disabled = state.busy || !state.openChatId;
+  updateComposerLock();
+}
+
+function currentSendLink() {
+  const links = state.openChat ? accountLinks(state.openChat) : [];
+  const chosen = $('send-account').value;
+  return links.find((item) => item.accountId === chosen) || links[0] || { chatId: state.openChatId || '', accountId: '' };
+}
+
+function updateComposerLock() {
+  const link = currentSendLink();
+  const account = state.accounts.find((item) => item.id === link.accountId);
+  const blocked = Boolean(link.accountId) && state.canSend[link.accountId] === false;
+  const note = $('send-blocked');
+  note.hidden = !blocked;
+  note.textContent = blocked
+    ? `Somente leitura — você não pode enviar como ${(account && account.label) || link.label || 'este número'}`
+    : '';
+  for (const id of ['send-text', 'send-kind', 'send-account', 'send-file', 'record-audio', 'attach-button', 'file-chip-clear']) {
+    $(id).disabled = blocked;
+  }
+  $('send-button').disabled = blocked || state.busy || !state.openChatId;
 }
 
 function renderAccountFilter() {
@@ -303,10 +337,21 @@ function appendMedia(bubble, message) {
     return;
   }
   if (message.type === 'audio' || message.type === 'ptt') {
+    const wrap = el('div', 'audio-wrap');
     const audio = document.createElement('audio');
     audio.controls = true;
+    audio.preload = 'none';
     audio.src = url;
-    bubble.append(audio);
+    wrap.append(audio);
+    if (message.transcript) {
+      bubble.append(wrap, el('p', 'transcript', message.transcript));
+      return;
+    }
+    const transcribe = el('button', 'transcribe-btn', 'Transcrever');
+    transcribe.type = 'button';
+    transcribe.addEventListener('click', () => runTranscription(transcribe, message, wrap));
+    wrap.append(transcribe);
+    bubble.append(wrap);
     return;
   }
   const link = document.createElement('a');
@@ -315,6 +360,31 @@ function appendMedia(bubble, message) {
   link.download = message.filename || 'arquivo';
   link.textContent = message.filename || 'Arquivo';
   bubble.append(link);
+}
+
+async function runTranscription(button, message, wrap) {
+  if (button.disabled) return;
+  const bubble = wrap.closest('.bubble');
+  const oldError = bubble && bubble.querySelector('.transcribe-error');
+  if (oldError) oldError.remove();
+  button.disabled = true;
+  button.classList.add('loading');
+  button.textContent = 'Transcrevendo…';
+  try {
+    const data = await api('/api/messages/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId: message.id, accountId: message.accountId || '' }),
+    });
+    message.transcript = data.text || '';
+    if (bubble) bubble.append(el('p', 'transcript', message.transcript));
+    button.remove();
+  } catch (error) {
+    button.disabled = false;
+    button.classList.remove('loading');
+    button.textContent = 'Transcrever';
+    if (bubble) bubble.append(el('p', 'transcribe-error', `Falha na transcrição: ${error.message}`));
+  }
 }
 
 function renderComposerAccounts() {
@@ -329,6 +399,7 @@ function renderComposerAccounts() {
     select.append(option);
   }
   if (state.openChat && state.openChat.accountId) select.value = state.openChat.accountId;
+  updateComposerLock();
 }
 
 function showExports(list, backup) {
@@ -380,6 +451,7 @@ async function loadChats() {
 }
 
 async function openChat(chatId, limit) {
+  if (recorder.active) stopRecording(true).then(resetRecorderUi);
   state.openChatId = chatId;
   state.limit = limit || state.limit || 40;
   const known = state.chats.find((chat) => chat.id === chatId);
@@ -410,6 +482,7 @@ function accountSummary(status) {
 function applyStatus(status) {
   state.status = status;
   state.accounts = status.accounts || [];
+  mergeAccounts(state.accounts);
   $('demo-banner').hidden = !status.demo;
   const me = status.me ? `${status.me.name || ''} ${status.me.number || ''}`.trim() : '';
   const labels = {
@@ -547,6 +620,8 @@ async function renderAccounts() {
     return;
   }
   state.accounts = data.accounts || [];
+  mergeAccounts(state.accounts);
+  updateComposerLock();
   box.replaceChildren();
   if (!state.accounts.length) box.append(el('p', 'muted', 'Nenhum número ainda.'));
   for (const account of state.accounts) {
@@ -653,15 +728,64 @@ async function runFinder(event) {
   }
 }
 
+function renderUserAccountChecks(selectedIds) {
+  const box = $('user-accounts');
+  box.replaceChildren();
+  const selected = new Set(selectedIds || []);
+  const title = el('span', 'account-checks-title muted', 'Números que este acesso pode usar (nenhum marcado = somente leitura):');
+  box.append(title);
+  if (!state.accounts.length) {
+    box.append(el('span', 'muted', 'Nenhum número cadastrado ainda.'));
+    return;
+  }
+  for (const account of state.accounts) {
+    const label = el('label', 'check account-check');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = account.id;
+    input.checked = selected.has(account.id);
+    label.append(input, document.createTextNode(account.label));
+    box.append(label);
+  }
+}
+
+function checkedAccountIds() {
+  return [...$('user-accounts').querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+}
+
+function resetUserForm() {
+  $('user-edit-id').value = '';
+  $('user-name').value = '';
+  $('user-name').disabled = false;
+  $('user-pass').value = '';
+  $('user-pass').required = true;
+  $('user-pass').placeholder = 'senha';
+  $('user-role').value = 'user';
+  $('user-submit').textContent = 'Criar';
+  $('user-edit-cancel').hidden = true;
+  renderUserAccountChecks([]);
+}
+
 async function renderUsers() {
   const box = $('user-list');
   box.replaceChildren(el('p', 'muted', 'Carregando…'));
   try {
+    const accountsData = await api('/api/accounts');
+    state.accounts = accountsData.accounts || [];
+    mergeAccounts(state.accounts);
+    if (!$('user-edit-id').value) renderUserAccountChecks(checkedAccountIds());
     const data = await api('/api/users');
     box.replaceChildren();
     for (const user of data.users) {
       const row = el('div', 'user-row');
-      row.append(el('div', '', `${user.username} · ${user.role}${user.disabled ? ' · desativado' : ''}`));
+      const info = el('div', 'user-info');
+      info.append(el('div', 'user-name', `${user.username} · ${user.role}${user.disabled ? ' · desativado' : ''}`));
+      const labels = (user.accountIds || []).map((id) => {
+        const account = state.accounts.find((item) => item.id === id);
+        return account ? account.label : id;
+      });
+      info.append(el('div', 'muted', labels.length ? `Números: ${labels.join(', ')}` : 'Sem números atribuídos'));
+      row.append(info);
       const actions = el('div');
       if (user.id !== state.session.user.id) {
         const toggle = el('button', '', user.disabled ? 'Ativar' : 'Desativar');
@@ -682,6 +806,21 @@ async function renderUsers() {
             body: JSON.stringify({ role: user.role === 'admin' ? 'user' : 'admin' }),
           }).then(renderUsers).catch((error) => toast(error.message));
         });
+        const edit = el('button', '', 'Editar');
+        edit.type = 'button';
+        edit.addEventListener('click', () => {
+          $('user-edit-id').value = user.id;
+          $('user-name').value = user.username;
+          $('user-name').disabled = true;
+          $('user-pass').value = '';
+          $('user-pass').required = false;
+          $('user-pass').placeholder = 'nova senha (opcional)';
+          $('user-role').value = user.role;
+          $('user-submit').textContent = 'Salvar';
+          $('user-edit-cancel').hidden = false;
+          renderUserAccountChecks(user.accountIds || []);
+          $('user-role').focus();
+        });
         const remove = el('button', '', 'Excluir');
         remove.type = 'button';
         remove.addEventListener('click', () => {
@@ -689,7 +828,7 @@ async function renderUsers() {
             .then(renderUsers)
             .catch((error) => toast(error.message));
         });
-        actions.append(toggle, role, remove);
+        actions.append(toggle, role, edit, remove);
       }
       row.append(actions);
       box.append(row);
@@ -709,7 +848,61 @@ function syncKind() {
   $('send-lng').hidden = kind !== 'location';
   $('send-phone').hidden = kind !== 'contact';
   $('send-description').placeholder = kind === 'contact' ? 'Nome do contato' : 'Descrição do local';
+  if (!fileKinds.has(kind)) {
+    $('send-file').value = '';
+    $('file-chip').hidden = true;
+  }
+  syncComposerButtons();
 }
+
+function syncComposerButtons() {
+  const hasText = Boolean($('send-text').value.trim());
+  const busyKind = $('send-kind').value !== 'text';
+  const showSend = hasText || busyKind;
+  $('send-button').hidden = !showSend;
+  $('record-audio').hidden = showSend;
+}
+
+function resetComposer() {
+  $('send-kind').value = 'text';
+  $('send-text').value = '';
+  $('send-file').value = '';
+  $('file-chip').hidden = true;
+  syncKind();
+}
+
+$('attach-button').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const menu = $('attach-menu');
+  menu.hidden = !menu.hidden;
+});
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.attach-wrap')) $('attach-menu').hidden = true;
+});
+$('attach-menu').addEventListener('click', (event) => {
+  const item = event.target.closest('[data-kind]');
+  if (!item) return;
+  $('attach-menu').hidden = true;
+  $('send-kind').value = item.dataset.kind;
+  syncKind();
+  const fileKinds = new Set(['image', 'video', 'audio', 'ptt', 'document', 'sticker']);
+  if (fileKinds.has(item.dataset.kind)) $('send-file').click();
+  else $('send-text').focus();
+});
+$('send-file').addEventListener('change', () => {
+  const file = $('send-file').files && $('send-file').files[0];
+  $('file-chip').hidden = !file;
+  $('file-chip-name').textContent = file ? file.name : '';
+  syncComposerButtons();
+});
+$('file-chip-clear').addEventListener('click', () => {
+  $('send-file').value = '';
+  $('file-chip').hidden = true;
+  $('send-kind').value = 'text';
+  syncKind();
+});
+$('send-text').addEventListener('input', syncComposerButtons);
+syncKind();
 
 $('chats').addEventListener('click', (event) => {
   const row = event.target.closest('[data-chat-id]');
@@ -736,7 +929,7 @@ $('chats').addEventListener('click', (event) => {
 $('messages').addEventListener('click', (event) => {
   const row = event.target.closest('[data-msg-id]');
   if (!row) return;
-  if (event.target.closest('a, audio, video')) return;
+  if (event.target.closest('a, audio, video, .transcribe-btn')) return;
   const id = row.dataset.msgId;
   const onTick = Boolean(event.target.closest('.tick'));
   if (event.shiftKey) event.preventDefault();
@@ -898,9 +1091,136 @@ $('composer').addEventListener('submit', async (event) => {
   updateActions();
   try {
     await api('/api/send', { method: 'POST', body });
-    $('send-text').value = '';
-    $('send-file').value = '';
+    resetComposer();
     await openChat(state.openChatId, state.limit);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    state.busy = false;
+    updateActions();
+  }
+});
+
+$('send-account').addEventListener('change', updateComposerLock);
+
+const recorder = {
+  stream: null,
+  media: null,
+  chunks: [],
+  timer: null,
+  startedAt: 0,
+  active: false,
+};
+
+function pickAudioMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  for (const mime of ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/ogg']) {
+    if (MediaRecorder.isTypeSupported(mime)) return mime;
+  }
+  return '';
+}
+
+function stopRecorderTracks() {
+  if (recorder.stream) for (const track of recorder.stream.getTracks()) track.stop();
+  recorder.stream = null;
+}
+
+function resetRecorderUi() {
+  recorder.active = false;
+  recorder.media = null;
+  recorder.chunks = [];
+  clearInterval(recorder.timer);
+  recorder.timer = null;
+  $('recorder-bar').hidden = true;
+  $('recorder-time').textContent = '0:00';
+  $('recorder-send').disabled = false;
+  $('recorder-cancel').disabled = false;
+}
+
+async function startRecording() {
+  if (recorder.active || state.busy || !state.openChatId) return;
+  if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Este navegador não suporta gravação de áudio');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    toast('Permita o acesso ao microfone para gravar áudio');
+    return;
+  }
+  recorder.stream = stream;
+  const mime = pickAudioMime();
+  try {
+    recorder.media = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  } catch (error) {
+    stopRecorderTracks();
+    toast('Não foi possível iniciar a gravação');
+    return;
+  }
+  recorder.chunks = [];
+  recorder.media.addEventListener('dataavailable', (event) => {
+    if (event.data && event.data.size) recorder.chunks.push(event.data);
+  });
+  recorder.active = true;
+  recorder.startedAt = Date.now();
+  $('recorder-bar').hidden = false;
+  $('recorder-time').textContent = '0:00';
+  recorder.timer = setInterval(() => {
+    const total = Math.max(0, Math.floor((Date.now() - recorder.startedAt) / 1000));
+    $('recorder-time').textContent = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  }, 500);
+  recorder.media.start(250);
+}
+
+function stopRecording(discard) {
+  return new Promise((resolve) => {
+    const media = recorder.media;
+    if (!media || media.state === 'inactive') {
+      stopRecorderTracks();
+      resolve(discard ? null : new Blob(recorder.chunks, { type: (media && media.mimeType) || 'audio/ogg' }));
+      return;
+    }
+    media.addEventListener('stop', () => {
+      stopRecorderTracks();
+      resolve(discard ? null : new Blob(recorder.chunks, { type: media.mimeType || 'audio/ogg' }));
+    }, { once: true });
+    media.stop();
+  });
+}
+
+$('record-audio').addEventListener('click', () => {
+  startRecording().catch((error) => toast(error.message));
+});
+
+$('recorder-cancel').addEventListener('click', async () => {
+  if (!recorder.active) return;
+  await stopRecording(true);
+  resetRecorderUi();
+});
+
+$('recorder-send').addEventListener('click', async () => {
+  if (!recorder.active || state.busy) return;
+  $('recorder-send').disabled = true;
+  $('recorder-cancel').disabled = true;
+  const blob = await stopRecording(false);
+  resetRecorderUi();
+  if (!blob || !blob.size) {
+    toast('Nada foi gravado');
+    return;
+  }
+  const link = currentSendLink();
+  const body = new FormData();
+  body.set('chatId', link.chatId || state.openChatId);
+  body.set('accountId', link.accountId || '');
+  body.set('kind', 'ptt');
+  body.set('file', blob, 'audio.ogg');
+  state.busy = true;
+  updateActions();
+  try {
+    await api('/api/send', { method: 'POST', body });
+    if (state.openChatId) await openChat(state.openChatId, state.limit);
   } catch (error) {
     toast(error.message);
   } finally {
@@ -935,13 +1255,117 @@ $('open-finder').addEventListener('click', () => {
 $('close-finder').addEventListener('click', () => showOverlay('finder-panel', false));
 $('finder-form').addEventListener('submit', runFinder);
 
+function trashReasonLabel(reason) {
+  return reason === 'revoked-phone' ? 'Apagada no celular' : 'Apagada aqui';
+}
+
+async function renderTrash() {
+  const box = $('trash-list');
+  box.replaceChildren();
+  let entries = [];
+  try {
+    entries = (await api('/api/trash')).entries || [];
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+  if (!entries.length) {
+    box.append(el('p', 'muted', 'Lixeira vazia. O que for apagado — aqui ou no celular — aparece aqui.'));
+    return;
+  }
+  for (const entry of entries) {
+    const card = el('div', 'trash-entry');
+    const head = el('div', 'trash-entry-head');
+    head.append(el('strong', '', entry.chatName || entry.chatId || 'Conversa'));
+    head.append(el('span', 'muted', ` ${entry.accountLabel || entry.accountId}`));
+    card.append(head);
+    const meta = [
+      trashReasonLabel(entry.reason),
+      new Date(entry.deletedAt).toLocaleString('pt-BR'),
+      `${entry.count} ${entry.count === 1 ? 'mensagem' : 'mensagens'}`,
+    ];
+    if (entry.withMedia) meta.push(`${entry.withMedia} com mídia`);
+    if (entry.restoredAt) meta.push(`restaurada em ${new Date(entry.restoredAt).toLocaleString('pt-BR')}`);
+    card.append(el('p', 'muted', meta.join(' · ')));
+    if (entry.preview) card.append(el('p', 'trash-preview', entry.preview));
+    const actions = el('div', 'trash-actions');
+    const restore = el('button', '', entry.restoredAt ? 'Restaurar de novo' : 'Restaurar no projeto');
+    restore.type = 'button';
+    restore.addEventListener('click', () => trashAction('restore', entry, false, restore));
+    actions.append(restore);
+    const resend = el('button', '', 'Restaurar e re-enviar ao WhatsApp');
+    resend.type = 'button';
+    resend.addEventListener('click', () => trashAction('restore', entry, true, resend));
+    actions.append(resend);
+    const destroy = el('button', 'danger', 'Excluir definitivo');
+    destroy.type = 'button';
+    destroy.addEventListener('click', () => {
+      if (!window.confirm('Some da lixeira e do computador, sem volta. Confirma?')) return;
+      trashAction('destroy', entry, false, destroy);
+    });
+    actions.append(destroy);
+    card.append(actions);
+    box.append(card);
+  }
+}
+
+async function trashAction(action, entry, toWhatsApp, button) {
+  button.disabled = true;
+  try {
+    const result = await api(`/api/trash/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: entry.accountId, id: entry.id, toWhatsApp }),
+    });
+    if (action === 'restore') {
+      const parts = [`${result.restored} mensagens restauradas no projeto`];
+      if (toWhatsApp) parts.push(`${result.sent} re-enviadas ao WhatsApp`);
+      if (result.failed && result.failed.length) parts.push(`${result.failed.length} falharam: ${result.failed[0].error}`);
+      toast(parts.join(' · '));
+      if (state.openChatId === entry.chatId) await openChat(entry.chatId, state.limit);
+    } else {
+      toast('Apagada da lixeira');
+    }
+    await renderTrash();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('open-trash').addEventListener('click', () => {
+  showOverlay('trash-panel', true);
+  renderTrash();
+});
+$('close-trash').addEventListener('click', () => showOverlay('trash-panel', false));
+
 $('open-users').addEventListener('click', () => {
+  resetUserForm();
   showOverlay('users-panel', true);
   renderUsers();
 });
 $('close-users').addEventListener('click', () => showOverlay('users-panel', false));
+$('user-edit-cancel').addEventListener('click', resetUserForm);
 $('user-form').addEventListener('submit', (event) => {
   event.preventDefault();
+  const editId = $('user-edit-id').value;
+  if (editId) {
+    const patch = {
+      role: $('user-role').value,
+      accountIds: checkedAccountIds(),
+    };
+    if ($('user-pass').value) patch.password = $('user-pass').value;
+    api(`/api/users/${editId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).then(() => {
+      resetUserForm();
+      return renderUsers();
+    }).catch((error) => toast(error.message));
+    return;
+  }
   api('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -949,10 +1373,10 @@ $('user-form').addEventListener('submit', (event) => {
       username: $('user-name').value,
       password: $('user-pass').value,
       role: $('user-role').value,
+      accountIds: checkedAccountIds(),
     }),
   }).then(() => {
-    $('user-name').value = '';
-    $('user-pass').value = '';
+    resetUserForm();
     return renderUsers();
   }).catch((error) => toast(error.message));
 });
@@ -1050,6 +1474,9 @@ function bootSocket() {
     $('progress').hidden = false;
     $('progress').textContent = `${progress.name || 'Conversa'}: ${progress.file}`;
   });
+  socket.on('trash-updated', () => {
+    if (!$('trash-panel').hidden) renderTrash();
+  });
 }
 
 function showSessionChrome(session) {
@@ -1061,6 +1488,7 @@ function showSessionChrome(session) {
   $('open-users').hidden = !user || user.role !== 'admin';
   $('open-accounts').hidden = Boolean(session && session.demo);
   $('open-finder').hidden = false;
+  $('open-trash').hidden = false;
 }
 
 async function enterApp(session) {
@@ -1071,6 +1499,10 @@ async function enterApp(session) {
   showSessionChrome(session);
   try {
     applyStatus(await api('/api/status'));
+    api('/api/accounts').then((data) => {
+      mergeAccounts(data.accounts);
+      updateComposerLock();
+    }).catch(() => {});
     const cache = await api('/api/cache');
     $('cache-line').textContent = `${cache.messages} msgs · ${cache.files} arquivos`;
     const qr = await fetch('/api/qr');
@@ -1092,6 +1524,7 @@ function showGate(session) {
   $('setup-form').hidden = !session.needsSetup;
   $('login-form').hidden = session.needsSetup;
   $('open-finder').hidden = true;
+  $('open-trash').hidden = true;
 }
 
 async function boot() {

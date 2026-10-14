@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createWaService } = require('./wa');
 const { createCache } = require('../lib/cache');
+const { createTrash } = require('../lib/trash');
 const { writeBackup, listBackupFolders } = require('../lib/backup');
 const { buildThreads, matchThreads, threadKey } = require('../lib/threads');
 const { resolveInside } = require('../lib/files');
@@ -24,6 +25,7 @@ function createHub({ dataDir, exportRoot, io }) {
   const backupRoot = path.join(dataDir, 'backups');
   const registryPath = path.join(dataDir, 'accounts.json');
   const cache = createCache(path.join(dataDir, 'cache'));
+  const trash = createTrash({ dir: path.join(dataDir, 'trash') });
   fs.mkdirSync(accountsDir, { recursive: true });
   fs.mkdirSync(backupRoot, { recursive: true });
   fs.mkdirSync(exportRoot, { recursive: true });
@@ -287,6 +289,30 @@ function createHub({ dataDir, exportRoot, io }) {
     };
   }
 
+  function archiveRecords(accountId, records, reason) {
+    if (!records.length) return null;
+    const row = runtime.get(accountId);
+    const meta = trash.archive({
+      accountId,
+      accountLabel: row ? row.label : '',
+      chatId: records[0].chatId || '',
+      chatName: records[0].chatName || '',
+      isGroup: Boolean(records[0].isGroup),
+      reason,
+      records,
+    });
+    if (meta) io.emit('trash-updated', { accountId, id: meta.id, reason });
+    return meta;
+  }
+
+  // Mensagem apagada no celular: vai para a lixeira com a mídia já baixada,
+  // mas CONTINUA no cache do projeto (a garantia de backup)
+  function onRevoked(row, messageId) {
+    const record = cache.findMessage(messageId);
+    if (!record) return;
+    archiveRecords(row.id, [record], 'revoked-phone');
+  }
+
   function rememberLive(row, chat, message) {
     const taggedChat = {
       ...chat,
@@ -317,6 +343,7 @@ function createHub({ dataDir, exportRoot, io }) {
       exportRoot,
       io: busFor(record.id),
       onLive: (chat, message) => rememberLive(row, chat, message),
+      onRevoke: (messageId) => onRevoked(row, messageId),
     });
     return row;
   }
@@ -338,14 +365,27 @@ function createHub({ dataDir, exportRoot, io }) {
   async function collectTagged() {
     const all = [];
     for (const row of runtime.values()) {
-      if (row.service.getStatus().status !== 'ready') {
+      const fromCache = () => {
         for (const chat of cache.listChats()) {
           if (chat.accountId === row.id) all.push({ ...chat, accountLabel: row.label });
         }
+      };
+      if (row.service.getStatus().status !== 'ready') {
+        fromCache();
         continue;
       }
-      const chats = await row.service.listChats();
-      for (const chat of chats) {
+      let chats = null;
+      try {
+        chats = await Promise.race([
+          row.service.listChats(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000)),
+        ]);
+      } catch (error) {
+        // Conta pronta mas página travada: a lista não pode cair por causa dela.
+        fromCache();
+        continue;
+      }
+      for (const chat of chats || []) {
         const tagged = tagChat(row, chat);
         cache.remember(tagged, []);
         all.push(tagged);
@@ -416,6 +456,12 @@ function createHub({ dataDir, exportRoot, io }) {
       accountId: row.id,
       accountLabel: row.label,
     })));
+    // Backup contínuo: baixa em segundo plano a mídia do histórico que ainda não temos
+    for (const message of messages) {
+      if (!message.hasMedia) continue;
+      const stored = cache.findMessage(message.id);
+      if (stored && !stored.filePath) queueMedia(row.id, message.id);
+    }
     return messages;
   }
 
@@ -555,6 +601,16 @@ function createHub({ dataDir, exportRoot, io }) {
     return file;
   }
 
+  // Mapeia mensagem → número dono, para a guarda de remoção por usuário
+  function messageAccountIds(ids) {
+    const map = {};
+    for (const id of ids || []) {
+      const record = cache.findMessage(id);
+      map[id] = record ? record.accountId : null;
+    }
+    return map;
+  }
+
   async function deleteMessages(ids, everyone, onProgress) {
     const groups = new Map();
     const unknown = [];
@@ -585,8 +641,117 @@ function createHub({ dataDir, exportRoot, io }) {
       deleted.push(...result.deleted);
       failed.push(...result.failed);
     }
+    // Lixeira: tudo que foi apagado com sucesso é arquivado (com mídia) antes de sair do cache
+    if (deleted.length) {
+      const records = deleted.map((id) => cache.findMessage(id)).filter(Boolean);
+      const byChat = new Map();
+      for (const record of records) {
+        const key = `${record.accountId}|${record.chatId}`;
+        if (!byChat.has(key)) byChat.set(key, []);
+        byChat.get(key).push(record);
+      }
+      for (const [key, group] of byChat) {
+        archiveRecords(key.split('|')[0], group, 'deleted-app');
+      }
+    }
     cache.forgetMessages(deleted);
     return { deleted, failed };
+  }
+
+  function listTrash(accountId) {
+    return trash.list(accountId || undefined).map((entry) => ({
+      id: entry.id,
+      accountId: entry.accountId,
+      accountLabel: entry.accountLabel,
+      chatId: entry.chatId,
+      chatName: entry.chatName,
+      isGroup: entry.isGroup,
+      reason: entry.reason,
+      deletedAt: entry.deletedAt,
+      restoredAt: entry.restoredAt || 0,
+      count: entry.messages.length,
+      preview: (entry.messages[0] && (entry.messages[0].body || entry.messages[0].filename || entry.messages[0].mimetype)) || '',
+      withMedia: entry.messages.filter((message) => message.mediaFile).length,
+    }));
+  }
+
+  // Restaura uma entrada da lixeira para o cache do projeto e, se pedido,
+  // re-envia o conteúdo ao WhatsApp (chega como mensagem nova, com crédito de origem)
+  async function restoreTrash(accountId, entryId, toWhatsApp) {
+    const entry = trash.get(accountId, entryId);
+    if (!entry) throw httpError('Entrada não encontrada na lixeira', 404);
+    const row = runtime.get(accountId);
+    if (!row) throw httpError('Número não encontrado', 404);
+
+    const last = entry.messages[entry.messages.length - 1];
+    const chat = {
+      id: entry.chatId,
+      name: entry.chatName,
+      isGroup: entry.isGroup,
+      timestamp: last ? last.timestamp : 0,
+      preview: last ? (last.body || last.type) : '',
+      accountId,
+      accountLabel: row.label,
+    };
+    cache.remember(chat, entry.messages);
+
+    // Devolve as mídias para o media-cache do número e religa no cache
+    let mediaRestored = 0;
+    const mediaDir = path.join(accountDataDir(row), 'media-cache');
+    for (const message of entry.messages) {
+      if (!message.mediaFile) continue;
+      const src = entry.mediaPath(message.mediaFile);
+      if (!fs.existsSync(src)) continue;
+      try {
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const dst = path.join(mediaDir, message.mediaFile);
+        if (!fs.existsSync(dst)) fs.copyFileSync(src, dst);
+        cache.attachFile(accountId, message.id, { path: dst, mimetype: message.mimetype, filename: message.filename });
+        mediaRestored += 1;
+      } catch (error) { /* mídia fica só na lixeira */ }
+    }
+
+    const sent = [];
+    const failed = [];
+    if (toWhatsApp) {
+      for (const message of [...entry.messages].sort((a, b) => a.timestamp - b.timestamp)) {
+        const when = new Date((message.timestamp || 0) * 1000).toLocaleString('pt-BR');
+        const who = message.authorLabel || message.author || (message.fromMe ? 'eu' : entry.chatName || 'contato');
+        const header = `↩️ Restaurado · ${who} · ${when}`;
+        try {
+          if (message.mediaFile && fs.existsSync(entry.mediaPath(message.mediaFile))) {
+            const buffer = fs.readFileSync(entry.mediaPath(message.mediaFile));
+            const result = await sendMessage({
+              accountId,
+              chatId: entry.chatId,
+              kind: 'file',
+              text: message.body ? `${header}\n${message.body}` : header,
+              file: { buffer, mimetype: message.mimetype || 'application/octet-stream', filename: message.filename || 'arquivo' },
+            });
+            sent.push(result.id || message.id);
+          } else if (String(message.body || '').trim()) {
+            const result = await sendMessage({ accountId, chatId: entry.chatId, kind: 'text', text: `${header}\n${message.body}` });
+            sent.push(result.id || message.id);
+          }
+        } catch (error) {
+          failed.push({ id: message.id, error: error.message || String(error) });
+        }
+      }
+    }
+
+    trash.markRestored(accountId, entryId);
+    return {
+      ok: true,
+      restored: entry.messages.length,
+      mediaRestored,
+      sent: sent.length,
+      failed,
+    };
+  }
+
+  function destroyTrash(accountId, entryId) {
+    if (!trash.destroy(accountId, entryId)) throw httpError('Entrada não encontrada na lixeira', 404);
+    return { ok: true };
   }
 
   async function exportChats(chatIds, onProgress, accountIds = {}) {
@@ -701,6 +866,11 @@ function createHub({ dataDir, exportRoot, io }) {
     return row.service.sendMessage(input);
   }
 
+  function ownerAccountId(chatId, accountId) {
+    const row = ownerOf(chatId, accountId);
+    return row ? row.id : null;
+  }
+
   loadMeta();
   migrateLegacy();
   for (const record of meta) ensureRuntime(record);
@@ -731,6 +901,11 @@ function createHub({ dataDir, exportRoot, io }) {
     backupRoot: () => backupRoot,
     exportDir,
     sendMessage,
+    ownerAccountId,
+    messageAccountIds,
+    listTrash,
+    restoreTrash,
+    destroyTrash,
     cacheStats: () => cache.stats(),
   };
 }

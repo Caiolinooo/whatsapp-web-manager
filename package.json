@@ -1,11 +1,11 @@
 {
   "name": "whatsapp-web-manager",
-  "version": "1.0.1",
+  "version": "1.2.0",
   "private": true,
   "description": "Vários números de WhatsApp Web, cache, busca, backup e login local.",
   "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js",
+    "start": "node --env-file-if-exists=.env --max-old-space-size=4096 server/index.js",
     "demo": "node server/demo-start.js",
     "test": "node --test test/*.test.js"
   },
@@ -16,7 +16,7 @@
     "express": "^4.21.2",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
-    "whatsapp-web.js": "1.34.7"
+    "whatsapp-web.js": "https://codeload.github.com/pedroslopez/whatsapp-web.js/tar.gz/064a3d5a5a3dce1281a6a12740b5a7051339d154"
   },
   "devDependencies": {
     "puppeteer-core": "^24.15.0"
