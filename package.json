@@ -1,0 +1,24 @@
+{
+  "name": "whatsapp-web-manager",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Vários números de WhatsApp Web, cache, busca, backup e login local.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "demo": "node server/demo-start.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
+    "whatsapp-web.js": "1.34.7"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.15.0"
+  }
+}

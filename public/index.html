@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Manager</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">WhatsApp Manager</div>
+  <div id="status-line">Aguardando conexão</div>
+  <div id="cache-line" class="muted"></div>
+  <div class="top-actions">
+    <button id="open-accounts" type="button" hidden>Números</button>
+    <button id="open-finder" type="button" hidden>Pesquisar</button>
+    <button id="open-users" type="button" hidden>Acessos</button>
+    <button id="open-password" type="button" hidden>Senha</button>
+    <span id="who" class="muted"></span>
+    <button id="sign-out" type="button" hidden>Sair do app</button>
+    <button id="connect" type="button">Conectar</button>
+    <button id="logout" type="button" hidden>Desconectar</button>
+  </div>
+</header>
+<p id="demo-banner" hidden>Modo demonstração. Nenhum WhatsApp real está ligado. Login não se aplica aqui.</p>
+<p id="warn">Cliente não oficial, na sua conta. O cache guarda o que chegar daqui para frente. Excluir para todos não tem volta.</p>
+
+<section id="gate" hidden>
+  <form id="setup-form" class="card" hidden>
+    <h2>Criar o administrador</h2>
+    <p class="muted">Primeiro acesso deste computador. A senha fica só nesta máquina.</p>
+    <label>Usuário<input id="setup-user" autocomplete="username" required></label>
+    <label>Senha<input id="setup-pass" type="password" autocomplete="new-password" required></label>
+    <button type="submit">Criar e entrar</button>
+    <p id="setup-error" class="form-error"></p>
+  </form>
+  <form id="login-form" class="card" hidden>
+    <h2>Entrar</h2>
+    <p class="muted">Sessão protegida por cookie. Oito erros seguidos travam o acesso por alguns minutos.</p>
+    <label>Usuário<input id="login-user" autocomplete="username" required></label>
+    <label>Senha<input id="login-pass" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Entrar</button>
+    <p id="login-error" class="form-error"></p>
+  </form>
+</section>
+
+<section id="connect-panel">
+  <h2 id="connect-title">Vincular WhatsApp Web</h2>
+  <p id="connect-text">Abra o WhatsApp no celular, entre em Dispositivos conectados e escolha Conectar dispositivo. Se já existir outra sessão Web, esta conexão assume o lugar dela.</p>
+  <img id="qr" alt="QR Code do WhatsApp" hidden>
+  <p id="loading-text" hidden></p>
+</section>
+
+<div id="workspace" hidden>
+  <aside>
+    <div class="side-head">
+      <input id="search" type="search" placeholder="Filtrar nome ou número" autocomplete="off">
+      <div id="account-filter" class="chips" hidden></div>
+      <div class="row-actions">
+        <button id="refresh-chats" type="button">Atualizar</button>
+        <button id="select-visible-chats" type="button">Selecionar visíveis</button>
+        <button id="clear-chats" type="button">Limpar</button>
+      </div>
+    </div>
+    <div id="chats"></div>
+    <div id="chat-bulk">
+      <span id="chat-count">Carregando conversas…</span>
+      <button id="export-selected" type="button" disabled>Baixar anexos e HTML</button>
+      <button id="backup-selected" type="button" disabled>Backup</button>
+    </div>
+  </aside>
+  <main>
+    <div id="empty">Escolha uma conversa</div>
+    <section id="thread" hidden>
+      <header id="thread-head"></header>
+      <div class="thread-tools">
+        <button id="load-more" type="button">Carregar mais</button>
+        <button id="export-one" type="button">Exportar esta conversa</button>
+        <button id="backup-one" type="button">Backup desta</button>
+        <button id="select-loaded" type="button">Selecionar carregadas</button>
+        <button id="clear-msgs" type="button">Limpar seleção</button>
+        <button id="delete-messages" type="button" disabled>Excluir</button>
+        <span id="msg-count"></span>
+      </div>
+      <p id="progress" hidden></p>
+      <div id="export-result"></div>
+      <div id="messages"></div>
+      <form id="composer">
+        <div class="composer-line">
+          <select id="send-kind" aria-label="Tipo da mensagem">
+            <option value="text">Texto</option>
+            <option value="image">Imagem</option>
+            <option value="video">Vídeo</option>
+            <option value="audio">Áudio</option>
+            <option value="ptt">Voz</option>
+            <option value="document">Arquivo</option>
+            <option value="sticker">Figurinha</option>
+            <option value="location">Local</option>
+            <option value="contact">Contato</option>
+          </select>
+          <select id="send-account" aria-label="Número que envia" hidden></select>
+          <input id="send-file" type="file" hidden>
+          <input id="send-text" type="text" placeholder="Mensagem" autocomplete="off">
+          <button id="send-button" type="submit">Enviar</button>
+        </div>
+        <div id="send-extra" hidden>
+          <input id="send-lat" type="text" inputmode="decimal" placeholder="Latitude" autocomplete="off">
+          <input id="send-lng" type="text" inputmode="decimal" placeholder="Longitude" autocomplete="off">
+          <input id="send-description" type="text" placeholder="Descrição do local ou nome do contato" autocomplete="off">
+          <input id="send-phone" type="text" placeholder="Telefone do contato" autocomplete="off" hidden>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<div id="modal" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title">Excluir as mensagens selecionadas?</h3>
+    <p>Excluir para mim tira as mensagens desta conta vinculada.</p>
+    <p>Excluir para todos só funciona em mensagens que você enviou e que o WhatsApp ainda aceita apagar. Isso não tem volta.</p>
+    <label class="check"><input id="delete-everyone" type="checkbox"> Excluir para todos</label>
+    <div class="dialog-actions">
+      <button id="cancel-delete" type="button">Cancelar</button>
+      <button id="confirm-delete" type="button">Excluir</button>
+    </div>
+  </div>
+</div>
+
+<div id="accounts-panel" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="accounts-title">
+    <h3 id="accounts-title">Números</h3>
+    <p class="muted">Cada número abre um navegador próprio. O mesmo contato em números diferentes aparece como uma conversa só.</p>
+    <form id="account-form" class="inline-form">
+      <input id="account-label" type="text" maxlength="40" placeholder="Nome do número" required>
+      <button type="submit">Adicionar número</button>
+    </form>
+    <div id="account-list"></div>
+    <div class="dialog-actions">
+      <button id="close-accounts" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="finder-panel" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="finder-title">
+    <h3 id="finder-title">Pesquisa no cache</h3>
+    <p class="muted">Índice do que já passou por aqui: texto, nome do arquivo, tipo e número. Não varre o histórico antigo que ainda não foi aberto.</p>
+    <form id="finder-form" class="inline-form">
+      <input id="finder-query" type="search" placeholder="Palavra, arquivo ou número" autocomplete="off">
+      <select id="finder-kind" aria-label="O que buscar">
+        <option value="messages">Mensagens</option>
+        <option value="files">Arquivos</option>
+        <option value="chats">Conversas</option>
+      </select>
+      <select id="finder-account" aria-label="Filtrar número"><option value="">Todos os números</option></select>
+      <button type="submit">Buscar</button>
+    </form>
+    <div id="finder-results"></div>
+    <div class="dialog-actions">
+      <button id="close-finder" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="users-panel" class="overlay" hidden>
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="users-title">
+    <h3 id="users-title">Acessos</h3>
+    <form id="user-form" class="inline-form">
+      <input id="user-name" type="text" placeholder="usuário" autocomplete="off" required>
+      <input id="user-pass" type="password" placeholder="senha" autocomplete="new-password" required>
+      <select id="user-role" aria-label="Papel">
+        <option value="user">Usuário</option>
+        <option value="admin">Administrador</option>
+      </select>
+      <button type="submit">Criar</button>
+    </form>
+    <div id="user-list"></div>
+    <div class="dialog-actions">
+      <button id="close-users" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="password-panel" class="overlay" hidden>
+  <form id="password-form" class="dialog" role="dialog" aria-modal="true" aria-labelledby="password-title">
+    <h3 id="password-title">Trocar senha</h3>
+    <label>Senha atual<input id="password-current" type="password" autocomplete="current-password" required></label>
+    <label>Nova senha<input id="password-next" type="password" autocomplete="new-password" required></label>
+    <div class="dialog-actions">
+      <button id="close-password" type="button">Cancelar</button>
+      <button type="submit">Salvar</button>
+    </div>
+  </form>
+</div>
+
+<div id="toast" hidden></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/select.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
